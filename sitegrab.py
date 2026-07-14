@@ -14,7 +14,9 @@ import argparse
 import os
 import posixpath
 import re
+import shutil
 import ssl
+import subprocess
 import sys
 import time
 import urllib.error
@@ -42,6 +44,30 @@ def make_ssl_context():
 
 
 SSL_CONTEXT = make_ssl_context()
+
+# Chromium-based browsers that can render JavaScript pages headlessly
+BROWSER_CANDIDATES = [
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "/Applications/Chromium.app/Contents/MacOS/Chromium",
+    "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+    "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+    "google-chrome", "chromium", "chromium-browser", "microsoft-edge",
+]
+
+SCRIPT_TAG_RE = re.compile(r"<script\b[^>]*>.*?</script>|<script\b[^>]*/>",
+                           re.IGNORECASE | re.DOTALL)
+
+
+def find_browser(explicit=None):
+    """Path to a Chromium-based browser binary, or None."""
+    candidates = [explicit] if explicit else BROWSER_CANDIDATES
+    for c in candidates:
+        if c and os.path.exists(c):
+            return c
+        found = shutil.which(c) if c else None
+        if found:
+            return found
+    return None
 
 # HTML attributes that can reference other resources
 LINK_ATTRS = {
@@ -93,7 +119,8 @@ class RefCollector(HTMLParser):
 
 
 class SiteGrabber:
-    def __init__(self, start_url, out_dir, max_pages, max_depth, delay, quiet=False):
+    def __init__(self, start_url, out_dir, max_pages, max_depth, delay, quiet=False,
+                 browser=None):
         self.start_url = start_url
         self.root = urllib.parse.urlsplit(start_url)
         self.out_dir = Path(out_dir)
@@ -101,6 +128,7 @@ class SiteGrabber:
         self.max_depth = max_depth
         self.delay = delay
         self.quiet = quiet
+        self.browser = browser  # path to headless Chrome; None = plain fetch
         self.local_paths = {}   # canonical URL -> Path relative to out_dir
         self.failed = set()
         self.pages_saved = 0
@@ -166,6 +194,35 @@ class SiteGrabber:
             self.log(f"  ! failed {url}: {e}")
             self.failed.add(url)
             return None, None
+
+    def render_page(self, url):
+        """Rendered DOM of a page after its JavaScript has run, via headless
+        Chrome. Returns HTML text, or None if rendering failed."""
+        cmd = [
+            self.browser,
+            "--headless=new",
+            "--dump-dom",
+            "--virtual-time-budget=10000",  # let JS/fetches settle, fast-forwarded
+            "--timeout=30000",
+            "--disable-gpu",
+            "--no-first-run",
+            "--hide-scrollbars",
+            "--mute-audio",
+            f"--user-agent={USER_AGENT}",
+            url,
+        ]
+        try:
+            result = subprocess.run(cmd, capture_output=True, timeout=60)
+        except (subprocess.TimeoutExpired, OSError) as e:
+            self.log(f"  ! render failed {url}: {e}")
+            return None
+        html = result.stdout.decode("utf-8", errors="replace")
+        if result.returncode != 0 or "<" not in html:
+            self.log(f"  ! render failed {url} (exit {result.returncode})")
+            return None
+        # Drop script tags: the snapshot is already rendered, and re-running
+        # the app's JS offline usually blanks the page or errors out.
+        return SCRIPT_TAG_RE.sub("", html)
 
     def save(self, rel_path, data):
         dest = self.out_dir / rel_path
@@ -271,6 +328,10 @@ class SiteGrabber:
             rel = self.local_path_for(url, ctype)
             self.local_paths[url] = rel
             html = data.decode("utf-8", errors="replace")
+            if self.browser:
+                rendered = self.render_page(url)
+                if rendered:
+                    html = rendered
             raw_pages[url] = html
             self.pages_saved += 1
             self.log(f"[{self.pages_saved}/{self.max_pages}] page {url}")
@@ -329,13 +390,27 @@ def main():
                         help="seconds to wait between requests (default: 0.2)")
     parser.add_argument("-q", "--quiet", action="store_true",
                         help="only print the final summary")
+    parser.add_argument("-r", "--render", action="store_true",
+                        help="render pages with headless Chrome first, so "
+                             "JavaScript-built sites (SPAs) are captured")
+    parser.add_argument("--browser", default=None,
+                        help="path to a Chromium-based browser binary "
+                             "(default: auto-detect)")
     args = parser.parse_args()
 
     url = args.url if "://" in args.url else "https://" + args.url
     out = args.output or urllib.parse.urlsplit(url).netloc.replace(":", "_")
 
+    browser = None
+    if args.render:
+        browser = find_browser(args.browser)
+        if not browser:
+            sys.exit("error: --render needs a Chromium-based browser "
+                     "(Chrome, Chromium, Edge, Brave); none found. "
+                     "Point at one with --browser /path/to/binary")
+
     grabber = SiteGrabber(url, out, args.max_pages, args.depth, args.delay,
-                          quiet=args.quiet)
+                          quiet=args.quiet, browser=browser)
     try:
         grabber.crawl()
     except KeyboardInterrupt:

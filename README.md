@@ -27,11 +27,34 @@ in your browser and browse it offline.
 -q, --quiet         only print the final summary
 ```
 
+```
+-r, --render        render pages with headless Chrome first, so
+                    JavaScript-built sites (SPAs) are captured
+--browser PATH      path to a Chromium-based browser (default: auto-detect
+                    Chrome, Chromium, Edge, or Brave)
+```
+
 Example — grab up to 500 pages, three links deep:
 
 ```sh
 python3 sitegrab.py https://example.com -o my-copy --max-pages 500 --depth 3
 ```
+
+## JavaScript-heavy sites (web apps)
+
+Sites built with React, Vue, etc. send a nearly-empty HTML shell and build
+the page in the browser. For those, use `--render`:
+
+```sh
+python3 sitegrab.py https://quotes.toscrape.com/js/ --render
+```
+
+With `--render`, each page is loaded in headless Chrome, its JavaScript runs,
+and sitegrab saves the *rendered* result — what you'd actually see on screen.
+Script tags are stripped from the snapshot (the page is already rendered, and
+re-running the app's code offline usually breaks it), so what you get is a
+frozen, readable copy of every page. It needs a Chromium-based browser
+installed and is slower than a plain grab.
 
 ## What it does
 
@@ -47,8 +70,8 @@ python3 sitegrab.py https://example.com -o my-copy --max-pages 500 --depth 3
 
 ## What it doesn't do
 
-- Run JavaScript — sites that render entirely client-side (SPAs) will save
-  their HTML shell, not the rendered content
+- Run JavaScript by default — for client-side-rendered sites (SPAs), use
+  `--render` (see above); the saved copy is readable but not interactive
 - Cross domains — CDN-hosted assets on other domains are left as live links
 - Log in — it only sees what an anonymous visitor sees
 
