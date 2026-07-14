@@ -8,7 +8,17 @@ they need (CSS, JavaScript, images, fonts), and rewrites all the links so the
 copy works offline in any browser. It's a single file with zero dependencies —
 just the Python standard library.
 
-## Usage
+## The easy way: point-and-click UI
+
+```sh
+python3 sitegrab_ui.py
+```
+
+This opens a page in your browser: paste a website address, hit **Download
+site**, watch the progress log, then click **Browse your offline copy**.
+Downloads land in a `grabs/` folder next to the script.
+
+## Command line
 
 ```sh
 python3 sitegrab.py https://example.com
