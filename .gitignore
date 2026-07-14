@@ -1,0 +1,6 @@
+# downloaded site copies
+*.com/
+*.org/
+*.net/
+test-output/
+__pycache__/
