@@ -85,6 +85,25 @@ installed and is slower than a plain grab.
 - Cross domains — CDN-hosted assets on other domains are left as live links
 - Log in — it only sees what an anonymous visitor sees
 
+## Host it as a public service
+
+The UI can run as a website so anyone can use it without installing anything.
+The repo ships with a `Dockerfile` and `render.yaml` — on [Render](https://render.com)
+(free tier, no card required):
+
+1. Sign up with your GitHub account
+2. **New → Web Service**, pick this repo — Render reads the Dockerfile
+   automatically
+3. Deploy. Your instance lives at `https://<name>.onrender.com`
+
+Hosted mode (`SITEGRAB_HOSTED=1`, set by the Dockerfile) binds to `$PORT`,
+returns grabs as ZIP downloads, caps each grab at 30 pages / depth 3, runs at
+most two grabs at once, and deletes saved grabs after 30 minutes. The
+JavaScript render option works in the container via the bundled Chromium.
+
+Note: free-tier services sleep when idle — the first visit after a quiet
+spell takes ~30 seconds to wake up.
+
 ## Be a good citizen
 
 Only mirror sites you're allowed to copy. Keep `--delay` reasonable, use

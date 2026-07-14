@@ -211,6 +211,8 @@ class SiteGrabber:
             f"--user-agent={USER_AGENT}",
             url,
         ]
+        if os.environ.get("SITEGRAB_CHROME_NO_SANDBOX") == "1":
+            cmd.insert(-1, "--no-sandbox")  # required when running in Docker
         try:
             result = subprocess.run(cmd, capture_output=True, timeout=60)
         except (subprocess.TimeoutExpired, OSError) as e:

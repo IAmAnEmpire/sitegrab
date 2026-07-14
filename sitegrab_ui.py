@@ -2,21 +2,31 @@
 """sitegrab_ui — a point-and-click web interface for sitegrab.
 
 Run it, and a page opens in your browser: paste a URL, hit Download,
-watch the progress log, then browse the offline copy right there.
+watch the progress log, then browse the offline copy or grab it as a ZIP.
 
     python3 sitegrab_ui.py
     python3 sitegrab_ui.py --port 9000
 
 Standard library only, like sitegrab itself. Downloads are saved into
-./grabs/<domain>/ next to this script.
+./grabs/ next to this script.
+
+Hosted mode (SITEGRAB_HOSTED=1) is for running this as a public service:
+binds to 0.0.0.0, honors the PORT env var, caps page counts, and deletes
+finished grabs after half an hour.
 """
 
 import argparse
+import io
 import json
 import mimetypes
+import os
+import secrets
+import shutil
 import threading
+import time
 import urllib.parse
 import webbrowser
+import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -24,61 +34,79 @@ import sitegrab
 
 GRABS_DIR = Path(__file__).resolve().parent / "grabs"
 
-state_lock = threading.Lock()
-state = {
-    "running": False,
-    "done": False,
-    "error": None,
-    "log": [],
-    "entry": None,   # URL path of the saved start page, e.g. /grabs/x.com/index.html
-    "out_dir": None,
-}
+HOSTED = os.environ.get("SITEGRAB_HOSTED") == "1"
+MAX_PAGES_CAP = 30 if HOSTED else 10000
+MAX_DEPTH_CAP = 3 if HOSTED else 50
+CONCURRENT_JOBS = 2
+JOB_TTL_SECONDS = 30 * 60  # hosted mode: purge grabs after this long
+
+jobs_lock = threading.Lock()
+jobs = {}  # job id -> dict(running, done, error, log, entry, out_dir, domain, created)
 
 
 class UIGrabber(sitegrab.SiteGrabber):
+    def __init__(self, job, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.job = job
+
     def log(self, msg):
-        with state_lock:
-            state["log"].append(msg)
+        with jobs_lock:
+            self.job["log"].append(msg)
 
 
-def run_grab(url, max_pages, depth, render):
+def run_grab(job, url, max_pages, depth, render):
     browser = None
     if render:
         browser = sitegrab.find_browser()
         if not browser:
-            with state_lock:
-                state["error"] = ("Render mode needs Chrome, Chromium, Edge or "
-                                  "Brave installed — none found.")
-                state["running"] = False
-                state["done"] = True
+            finish(job, error="Render mode needs Chrome, Chromium, Edge or "
+                              "Brave installed — none found.")
             return
 
     url = url if "://" in url else "https://" + url
     domain = urllib.parse.urlsplit(url).netloc.replace(":", "_")
-    out_dir = GRABS_DIR / domain
+    out_dir = GRABS_DIR / job["id"]
 
-    grabber = UIGrabber(url, out_dir, max_pages, depth, delay=0.2,
+    grabber = UIGrabber(job, url, out_dir, max_pages, depth, delay=0.2,
                         browser=browser)
     try:
         grabber.crawl()
         start = grabber.canonicalize(url)
         entry = grabber.local_paths.get(start)
-        with state_lock:
+        with jobs_lock:
+            job["domain"] = domain
+            job["out_dir"] = str(out_dir)
             if grabber.pages_saved == 0:
-                state["error"] = "Nothing downloaded — check the URL and the log."
+                job["error"] = "Nothing downloaded — check the address and the log."
             elif entry:
-                state["entry"] = "/grabs/" + domain + "/" + entry.as_posix()
-            state["out_dir"] = str(out_dir)
+                job["entry"] = f"/grabs/{job['id']}/" + entry.as_posix()
+        finish(job)
     except SystemExit as e:
-        with state_lock:
-            state["error"] = str(e)
+        finish(job, error=str(e))
     except Exception as e:
-        with state_lock:
-            state["error"] = f"{type(e).__name__}: {e}"
-    finally:
-        with state_lock:
-            state["running"] = False
-            state["done"] = True
+        finish(job, error=f"{type(e).__name__}: {e}")
+
+
+def finish(job, error=None):
+    with jobs_lock:
+        if error:
+            job["error"] = error
+        job["running"] = False
+        job["done"] = True
+
+
+def purge_old_jobs():
+    """Hosted mode: forget grabs after JOB_TTL_SECONDS so disk stays small."""
+    while True:
+        time.sleep(300)
+        cutoff = time.monotonic() - JOB_TTL_SECONDS
+        with jobs_lock:
+            stale = [j for j in jobs.values()
+                     if j["done"] and j["created"] < cutoff]
+            for job in stale:
+                del jobs[job["id"]]
+        for job in stale:
+            shutil.rmtree(GRABS_DIR / job["id"], ignore_errors=True)
 
 
 PAGE = """<!DOCTYPE html>
@@ -136,8 +164,8 @@ PAGE = """<!DOCTYPE html>
   #result.ok { background: #e9f3ee; border-color: #bcd9cc; }
   #result.bad { background: #f7e9e6; border-color: #e3c1ba; }
   #result a { color: var(--accent); font-weight: 650; }
-  #result code { background: rgba(0,0,0,.06); padding: 1px 5px; border-radius: 4px; }
   footer { margin-top: 20px; font-size: 12.5px; color: var(--muted); text-align: center; }
+  footer a { color: var(--muted); }
 </style>
 </head>
 <body>
@@ -151,11 +179,12 @@ PAGE = """<!DOCTYPE html>
     <div class="row">
       <div class="field">
         <label for="pages">Max pages</label>
-        <input type="number" id="pages" value="100" min="1" max="10000">
+        <input type="number" id="pages" value="__DEFAULT_PAGES__" min="1"
+               max="__MAX_PAGES__">
       </div>
       <div class="field">
         <label for="depth">Link depth</label>
-        <input type="number" id="depth" value="5" min="0" max="50">
+        <input type="number" id="depth" value="3" min="0" max="__MAX_DEPTH__">
       </div>
     </div>
     <label class="check">
@@ -166,12 +195,12 @@ PAGE = """<!DOCTYPE html>
     <div id="log"></div>
     <div id="result"></div>
   </div>
-  <footer>Only mirror sites you're allowed to copy. Files land in the
-  <code style="font-size:12px">grabs/</code> folder.</footer>
+  <footer>Only mirror sites you're allowed to copy. __FOOTER_NOTE__
+  &middot; <a href="https://github.com/IAmAnEmpire/sitegrab">source</a></footer>
 </main>
 <script>
 const $ = id => document.getElementById(id);
-let timer = null;
+let timer = null, jobId = null;
 
 $('go').addEventListener('click', start);
 $('url').addEventListener('keydown', e => { if (e.key === 'Enter') start(); });
@@ -182,21 +211,28 @@ async function start() {
   $('go').disabled = true; $('go').textContent = 'Downloading…';
   $('result').style.display = 'none';
   $('log').style.display = 'block'; $('log').textContent = '';
-  await fetch('/start', {
+  const resp = await fetch('/start', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({
       url,
-      maxPages: +$('pages').value || 100,
-      depth: +$('depth').value || 5,
+      maxPages: +$('pages').value || 30,
+      depth: +$('depth').value || 3,
       render: $('render').checked,
     }),
   });
+  const data = await resp.json();
+  if (!resp.ok) {
+    showResult('bad', data.error || 'Could not start.');
+    $('go').disabled = false; $('go').textContent = 'Download site';
+    return;
+  }
+  jobId = data.job;
   timer = setInterval(poll, 700);
 }
 
 async function poll() {
-  const s = await (await fetch('/status')).json();
+  const s = await (await fetch('/status?job=' + jobId)).json();
   const log = $('log');
   const stick = log.scrollTop + log.clientHeight >= log.scrollHeight - 8;
   log.textContent = s.log.join('\\n');
@@ -204,16 +240,21 @@ async function poll() {
   if (!s.done) return;
   clearInterval(timer);
   $('go').disabled = false; $('go').textContent = 'Download site';
+  if (s.error) {
+    showResult('bad', s.error);
+  } else {
+    showResult('ok',
+      'Done! <a href="' + s.entry + '" target="_blank">Browse the offline ' +
+      'copy</a> &nbsp;or&nbsp; <a href="/zip?job=' + jobId + '">download it ' +
+      'as a ZIP</a>.');
+  }
+}
+
+function showResult(kind, html) {
   const r = $('result');
   r.style.display = 'block';
-  if (s.error) {
-    r.className = 'bad';
-    r.textContent = s.error;
-  } else {
-    r.className = 'ok';
-    r.innerHTML = 'Done! <a href="' + s.entry + '" target="_blank">Browse your ' +
-      'offline copy</a> — saved in <code>' + s.outDir + '</code>';
-  }
+  r.className = kind;
+  r.innerHTML = html;
 }
 </script>
 </body>
@@ -221,40 +262,76 @@ async function poll() {
 """
 
 
+def render_index():
+    return (PAGE
+            .replace("__DEFAULT_PAGES__", "30" if HOSTED else "100")
+            .replace("__MAX_PAGES__", str(MAX_PAGES_CAP))
+            .replace("__MAX_DEPTH__", str(MAX_DEPTH_CAP))
+            .replace("__FOOTER_NOTE__",
+                     "Grabs are limited in size and deleted after 30 minutes."
+                     if HOSTED else
+                     "Files land in the <code>grabs/</code> folder."))
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):  # keep the terminal quiet
         pass
 
-    def send(self, code, body, ctype="text/html; charset=utf-8"):
+    def send(self, code, body, ctype="text/html; charset=utf-8", extra=None):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
+        for k, v in (extra or {}).items():
+            self.send_header(k, v)
         self.end_headers()
         self.wfile.write(body)
+
+    def job_from_query(self):
+        q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+        job_id = (q.get("job") or [""])[0]
+        with jobs_lock:
+            return jobs.get(job_id)
 
     def do_GET(self):
         path = urllib.parse.unquote(urllib.parse.urlsplit(self.path).path)
         if path == "/":
-            self.send(200, PAGE.encode())
+            self.send(200, render_index().encode())
         elif path == "/status":
-            with state_lock:
+            job = self.job_from_query()
+            if not job:
+                self.send(404, b'{"error": "unknown job"}', "application/json")
+                return
+            with jobs_lock:
                 body = json.dumps({
-                    "running": state["running"],
-                    "done": state["done"],
-                    "error": state["error"],
-                    "log": state["log"][-500:],
-                    "entry": state["entry"],
-                    "outDir": state["out_dir"],
+                    "done": job["done"], "error": job["error"],
+                    "log": job["log"][-500:], "entry": job["entry"],
                 }).encode()
             self.send(200, body, "application/json")
+        elif path == "/zip":
+            self.serve_zip()
         elif path.startswith("/grabs/"):
             self.serve_grab(path)
         else:
             self.send(404, b"not found", "text/plain")
 
+    def serve_zip(self):
+        job = self.job_from_query()
+        if not job or not job["done"] or not job["out_dir"]:
+            self.send(404, b"unknown job", "text/plain")
+            return
+        root = Path(job["out_dir"])
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+            for f in sorted(root.rglob("*")):
+                if f.is_file():
+                    z.write(f, f.relative_to(root))
+        name = (job["domain"] or "site") + ".zip"
+        self.send(200, buf.getvalue(), "application/zip",
+                  {"Content-Disposition": f'attachment; filename="{name}"'})
+
     def serve_grab(self, path):
         target = (GRABS_DIR / path[len("/grabs/"):]).resolve()
-        if not str(target).startswith(str(GRABS_DIR.resolve())):
+        if not str(target).startswith(str(GRABS_DIR.resolve()) + os.sep):
             self.send(403, b"forbidden", "text/plain")
             return
         if target.is_dir():
@@ -269,41 +346,53 @@ class Handler(BaseHTTPRequestHandler):
         if self.path != "/start":
             self.send(404, b"not found", "text/plain")
             return
-        with state_lock:
-            if state["running"]:
-                self.send(409, b'{"error": "already running"}', "application/json")
-                return
-            state.update(running=True, done=False, error=None, log=[],
-                         entry=None, out_dir=None)
+        with jobs_lock:
+            active = sum(1 for j in jobs.values() if j["running"])
+        if active >= CONCURRENT_JOBS:
+            self.send(429, b'{"error": "Busy right now - try again in a minute."}',
+                      "application/json")
+            return
         length = int(self.headers.get("Content-Length", 0))
         try:
             req = json.loads(self.rfile.read(length))
             url = str(req["url"])
-            max_pages = max(1, min(int(req.get("maxPages", 100)), 10000))
-            depth = max(0, min(int(req.get("depth", 5)), 50))
+            max_pages = max(1, min(int(req.get("maxPages", 30)), MAX_PAGES_CAP))
+            depth = max(0, min(int(req.get("depth", 3)), MAX_DEPTH_CAP))
             render = bool(req.get("render", False))
         except (ValueError, KeyError, json.JSONDecodeError):
-            with state_lock:
-                state.update(running=False, done=True, error="bad request")
             self.send(400, b'{"error": "bad request"}', "application/json")
             return
-        threading.Thread(target=run_grab, args=(url, max_pages, depth, render),
+        job = {
+            "id": secrets.token_hex(8), "running": True, "done": False,
+            "error": None, "log": [], "entry": None, "out_dir": None,
+            "domain": None, "created": time.monotonic(),
+        }
+        with jobs_lock:
+            jobs[job["id"]] = job
+        threading.Thread(target=run_grab,
+                         args=(job, url, max_pages, depth, render),
                          daemon=True).start()
-        self.send(200, b'{"ok": true}', "application/json")
+        self.send(200, json.dumps({"job": job["id"]}).encode(),
+                  "application/json")
 
 
 def main():
     parser = argparse.ArgumentParser(prog="sitegrab_ui",
                                      description="Web UI for sitegrab.")
-    parser.add_argument("--port", type=int, default=8737)
+    parser.add_argument("--port", type=int,
+                        default=int(os.environ.get("PORT", 8737)))
     parser.add_argument("--no-open", action="store_true",
                         help="don't auto-open the browser")
     args = parser.parse_args()
 
-    server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
+    if HOSTED:
+        threading.Thread(target=purge_old_jobs, daemon=True).start()
+
+    host = "0.0.0.0" if HOSTED else "127.0.0.1"
+    server = ThreadingHTTPServer((host, args.port), Handler)
     url = f"http://localhost:{args.port}"
     print(f"sitegrab UI running at {url}  (Ctrl-C to stop)")
-    if not args.no_open:
+    if not args.no_open and not HOSTED:
         threading.Timer(0.4, webbrowser.open, [url]).start()
     try:
         server.serve_forever()
