@@ -8,6 +8,11 @@ offline in any browser. Standard library only — no dependencies.
 Usage:
     python3 sitegrab.py https://example.com
     python3 sitegrab.py https://example.com -o my-copy --max-pages 200 --depth 3
+
+A [N-M] range in the URL expands to one page per number — handy for books
+or docs published as numbered chapters:
+
+    python3 sitegrab.py "https://books.com/epk/[1-200]"
 """
 
 import argparse
@@ -69,6 +74,28 @@ def find_browser(explicit=None):
             return found
     return None
 
+RANGE_RE = re.compile(r"\[(\d+)-(\d+)\]")
+
+
+def expand_pattern(url, limit=10000):
+    """Expand one [N-M] numeric range in a URL into a list of URLs.
+
+    "https://books.com/epk/[1-200]" -> epk/1, epk/2, ... epk/200.
+    Zero-padded starts keep their width: [001-200] -> 001, 002, ...
+    A URL without a range comes back as a one-element list.
+    """
+    m = RANGE_RE.search(url)
+    if not m:
+        return [url]
+    a, b = m.group(1), m.group(2)
+    width = len(a) if a.startswith("0") else 0
+    lo, hi = sorted((int(a), int(b)))
+    if hi - lo + 1 > limit:
+        raise ValueError(f"range [{a}-{b}] expands to more than {limit} pages")
+    return [url[:m.start()] + str(n).zfill(width) + url[m.end():]
+            for n in range(lo, hi + 1)]
+
+
 # HTML attributes that can reference other resources
 LINK_ATTRS = {
     ("a", "href"),
@@ -121,8 +148,10 @@ class RefCollector(HTMLParser):
 class SiteGrabber:
     def __init__(self, start_url, out_dir, max_pages, max_depth, delay, quiet=False,
                  browser=None):
-        self.start_url = start_url
-        self.root = urllib.parse.urlsplit(start_url)
+        # start_url may be a single URL or a list of them (e.g. an expanded
+        # [1-200] chapter range); the first one is the "front door"
+        self.start_urls = [start_url] if isinstance(start_url, str) else list(start_url)
+        self.root = urllib.parse.urlsplit(self.start_urls[0])
         self.out_dir = Path(out_dir)
         self.max_pages = max_pages
         self.max_depth = max_depth
@@ -305,12 +334,13 @@ class SiteGrabber:
         )
 
     def crawl(self):
-        start = self.canonicalize(self.start_url)
-        if start is None:
+        seeds = [s for s in (self.canonicalize(u) for u in self.start_urls) if s]
+        if not seeds:
             sys.exit("error: start URL must be http(s)")
+        start = seeds[0]
 
-        queue = deque([(start, 0)])
-        seen = {start}
+        queue = deque((s, 0) for s in seeds)
+        seen = set(seeds)
         raw_pages = {}  # url -> html text, rewritten after crawl completes
 
         while queue and self.pages_saved < self.max_pages:
@@ -381,13 +411,17 @@ def main():
         prog="sitegrab",
         description="Download a website for offline reading.",
     )
-    parser.add_argument("url", help="start URL, e.g. https://example.com")
+    parser.add_argument("url",
+                        help="start URL, e.g. https://example.com — may "
+                             "contain one [N-M] range: books.com/epk/[1-200]")
     parser.add_argument("-o", "--output", default=None,
                         help="output directory (default: ./<domain>)")
-    parser.add_argument("--max-pages", type=int, default=100,
-                        help="maximum number of pages to download (default: 100)")
-    parser.add_argument("--depth", type=int, default=5,
-                        help="maximum link depth from the start page (default: 5)")
+    parser.add_argument("--max-pages", type=int, default=None,
+                        help="maximum number of pages to download "
+                             "(default: 100, or the range size + 50)")
+    parser.add_argument("--depth", type=int, default=None,
+                        help="maximum link depth from the start page "
+                             "(default: 5, or 0 when a [N-M] range is given)")
     parser.add_argument("--delay", type=float, default=0.2,
                         help="seconds to wait between requests (default: 0.2)")
     parser.add_argument("-q", "--quiet", action="store_true",
@@ -401,6 +435,18 @@ def main():
     args = parser.parse_args()
 
     url = args.url if "://" in args.url else "https://" + args.url
+    try:
+        urls = expand_pattern(url)
+    except ValueError as e:
+        sys.exit(f"error: {e}")
+    ranged = len(urls) > 1
+    if ranged:
+        print(f"range: {len(urls)} pages, {urls[0]} ... {urls[-1]}")
+    # a range means "get exactly these pages" — don't wander off following
+    # links unless the user explicitly asks for depth
+    depth = args.depth if args.depth is not None else (0 if ranged else 5)
+    max_pages = args.max_pages if args.max_pages is not None else (
+        len(urls) + 50 if ranged else 100)
     out = args.output or urllib.parse.urlsplit(url).netloc.replace(":", "_")
 
     browser = None
@@ -411,7 +457,7 @@ def main():
                      "(Chrome, Chromium, Edge, Brave); none found. "
                      "Point at one with --browser /path/to/binary")
 
-    grabber = SiteGrabber(url, out, args.max_pages, args.depth, args.delay,
+    grabber = SiteGrabber(urls, out, max_pages, depth, args.delay,
                           quiet=args.quiet, browser=browser)
     try:
         grabber.crawl()

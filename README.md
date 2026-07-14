@@ -50,6 +50,22 @@ Example — grab up to 500 pages, three links deep:
 python3 sitegrab.py https://example.com -o my-copy --max-pages 500 --depth 3
 ```
 
+### Numbered chapters: URL ranges
+
+For books or docs published as numbered pages, put a `[N-M]` range in the
+URL (quote it so your shell leaves the brackets alone):
+
+```sh
+python3 sitegrab.py "https://books.com/epk/[1-200]"
+```
+
+That downloads exactly chapters 1 through 200 — no link-following, so
+nothing extra comes along — and rewrites the next/previous links between
+chapters so you can read straight through offline. Zero-padded numbering
+works too (`[001-200]`), and the same syntax works in the web UI's address
+box. Big grabs like a 200-chapter book are best done locally rather than on
+a hosted instance, which caps grabs at 30 pages.
+
 ## JavaScript-heavy sites (web apps)
 
 Sites built with React, Vue, etc. send a nearly-empty HTML shell and build

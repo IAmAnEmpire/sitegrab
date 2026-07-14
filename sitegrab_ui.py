@@ -64,14 +64,24 @@ def run_grab(job, url, max_pages, depth, render):
             return
 
     url = url if "://" in url else "https://" + url
+    try:
+        urls = sitegrab.expand_pattern(url)
+    except ValueError as e:
+        finish(job, error=str(e))
+        return
+    if len(urls) > 1:
+        # a [N-M] range means "get exactly these pages": don't follow links,
+        # and let the page budget cover the whole range (hosted cap still wins)
+        depth = 0
+        max_pages = min(max(max_pages, len(urls)), MAX_PAGES_CAP)
     domain = urllib.parse.urlsplit(url).netloc.replace(":", "_")
     out_dir = GRABS_DIR / job["id"]
 
-    grabber = UIGrabber(job, url, out_dir, max_pages, depth, delay=0.2,
+    grabber = UIGrabber(job, urls, out_dir, max_pages, depth, delay=0.2,
                         browser=browser)
     try:
         grabber.crawl()
-        start = grabber.canonicalize(url)
+        start = grabber.canonicalize(urls[0])
         entry = grabber.local_paths.get(start)
         with jobs_lock:
             job["domain"] = domain
@@ -174,8 +184,8 @@ PAGE = """<!DOCTYPE html>
   <p class="tag">Download a whole website and read it offline.</p>
   <div class="card">
     <label for="url">Website address</label>
-    <input type="text" id="url" placeholder="https://example.com" autofocus
-           spellcheck="false">
+    <input type="text" id="url" autofocus spellcheck="false"
+           placeholder="https://example.com &mdash; or a range: books.com/epk/[1-200]">
     <div class="row">
       <div class="field">
         <label for="pages">Max pages</label>
