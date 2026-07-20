@@ -406,6 +406,7 @@ PAGE = r"""<!DOCTYPE html>
 </div>
 
 <script>
+const ZIPBASE = '__ZIP_BASE__';
 const $ = id => document.getElementById(id);
 var cv = $('draft'), cx = cv.getContext('2d');
 var W, H, DPR = Math.min(devicePixelRatio || 1, 2);
@@ -614,11 +615,11 @@ async function poll() {
       : 'Saved ' + nPages + ' pages and ' + nFiles + ' files.')
     + ' Your ZIP is downloading.</span>'
     + 'Unzip the file in your Downloads, then double-click <b>Open-website.html</b> to view your downloaded site.';
-  $('zipLink').href = 'zip?job=' + jobId;
+  $('zipLink').href = ZIPBASE + 'zip?job=' + jobId;
   document.body.classList.remove('drafting');
   document.body.classList.add('certified');
   var auto = document.createElement('a');
-  auto.href = 'zip?job=' + jobId; auto.download = '';
+  auto.href = ZIPBASE + 'zip?job=' + jobId; auto.download = '';
   document.body.appendChild(auto); auto.click(); auto.remove();
 }
 
@@ -643,6 +644,9 @@ $('again').addEventListener('click', function () {
 
 def render_index():
     return (PAGE
+            .replace("__ZIP_BASE__",
+                     (os.environ.get("RENDER_EXTERNAL_URL", "").rstrip("/") + "/")
+                     if HOSTED and os.environ.get("RENDER_EXTERNAL_URL") else "")
             .replace("__DEFAULT_PAGES__", "30" if HOSTED else "100")
             .replace("__MAX_PAGES__", str(MAX_PAGES_CAP))
             .replace("__MAX_DEPTH__", str(MAX_DEPTH_CAP))
