@@ -251,6 +251,40 @@ PAGE = r"""<!DOCTYPE html>
   .exports button { background: none; border: 0; color: #8fa9c6; cursor: pointer;
     font-family: 'IBM Plex Mono', monospace; font-size: 0.62rem; letter-spacing: 0.18em; text-transform: uppercase; }
   .exports button:hover { color: var(--line); }
+
+  .donenote { position: fixed; z-index: 4; left: 50%; bottom: 150px; transform: translateX(-50%);
+    display: none; max-width: min(560px, 90vw); text-align: center;
+    font-size: 0.7rem; letter-spacing: 0.08em; color: #b8cbe2; line-height: 1.8;
+    background: rgba(14,48,89,0.92); border: 1px dashed var(--faint); padding: 10px 16px; }
+  body.certified .donenote { display: block; }
+
+  .mobilist { display: none; }
+
+  @media (max-width: 700px) {
+    .frame { inset: 8px; }
+    .head { top: 22px; left: 22px; }
+    .head h1 { font-size: 1.25rem; letter-spacing: 0.18em; }
+    .head .sub { font-size: 0.55rem; }
+    canvas { display: none; }
+    .spec { top: 80px; transform: translate(-50%, 0); max-height: calc(100vh - 100px); }
+    body.drafting .spec, body.certified .spec { transform: translate(-50%, -4%); }
+    .grid2 { gap: 14px; }
+    .mobilist { display: block; position: fixed; z-index: 2; top: 84px; left: 6vw; right: 6vw;
+      bottom: 175px; overflow-y: auto; font-size: 0.72rem; line-height: 2.1;
+      color: #b8cbe2; opacity: 0; pointer-events: none; transition: opacity .4s; }
+    body.drafting .mobilist, body.certified .mobilist { opacity: 1; }
+    .mobilist .pg { color: var(--line); font-weight: 600; }
+    .mobilist .as { color: var(--pencil); padding-left: 16px; }
+    .readout { left: 6vw; right: 6vw; bottom: 92px; max-width: none; }
+    .readout pre { width: 88vw; max-height: 20vh; }
+    .cert { top: auto; bottom: 215px; font-size: 1.15rem; letter-spacing: 0.2em;
+      padding: 10px 18px 8px; border-width: 3px; }
+    .exports { bottom: 20px; width: 92vw; gap: 8px; }
+    .exports a { flex: 1 1 40%; text-align: center; padding: 13px 8px; font-size: 0.62rem; }
+    .exports button { flex: 1 1 100%; padding-top: 6px; }
+    .donenote { bottom: 86px; }
+    .titleblock { display: none; }
+  }
 </style>
 </head>
 <body>
@@ -300,6 +334,9 @@ PAGE = r"""<!DOCTYPE html>
 </div>
 
 <div class="cert" id="cert">True copy<small>certified &middot; works offline</small></div>
+
+<div class="mobilist" id="mobilist"></div>
+<div class="donenote" id="doneNote"></div>
 
 <div class="exports">
   <a class="main" id="browseLink" href="#" target="_blank">Inspect the copy</a>
@@ -459,6 +496,15 @@ function digest(line) {
     addAsset(ext);
   }
   $('roF').textContent = nFiles;
+  var ml = $('mobilist');
+  if (ml.childElementCount > 300) ml.removeChild(ml.firstChild);
+  var atBottom = ml.scrollTop + ml.clientHeight >= ml.scrollHeight - 12;
+  var d = document.createElement('div');
+  if (line.indexOf('+ asset') !== -1) { d.className = 'as'; d.textContent = '+ ' + lastSeg(line.split('+ asset ')[1] || ''); }
+  else if (line.charAt(0) === '[') { d.className = 'pg'; d.textContent = '▸ ' + (line.split('page ')[1] || '').replace(/https?:\/\//, '').slice(0, 44); }
+  else return;
+  ml.appendChild(d);
+  if (atBottom) ml.scrollTop = ml.scrollHeight;
 }
 
 async function poll() {
@@ -481,6 +527,9 @@ async function poll() {
     return;
   }
   $('roNow').textContent = 'complete';
+  $('doneNote').textContent = nPages <= 1
+    ? 'Saved 1 page. It had no further links on the same site to follow, so that single page is your whole copy.'
+    : 'Saved ' + nPages + ' pages and ' + nFiles + ' files, rewired to work offline.';
   $('browseLink').href = s.entry;
   $('zipLink').href = 'zip?job=' + jobId;
   document.body.classList.remove('drafting');
