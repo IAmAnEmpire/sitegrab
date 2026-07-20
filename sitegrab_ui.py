@@ -194,7 +194,9 @@ PAGE = r"""<!DOCTYPE html>
     font-size: 0.7rem; letter-spacing: 0.1em; text-transform: uppercase; color: #8fa9c6; }
   .tickbox .sq { width: 16px; height: 16px; border: 1.5px solid var(--line); position: relative; flex: none; }
   .tickbox .tb-txt { line-height: 1.7; }
-  .tickbox .tb-txt b { color: var(--line); font-weight: 600; letter-spacing: 0.08em; }
+  .tickbox .tb-txt b { color: var(--line); font-weight: 600; letter-spacing: 0.08em; font-size: 0.8rem; }
+  .jsrow { width: 100%; margin-top: 20px; padding: 12px 14px;
+    border: 1px dashed var(--faint); border-left: 3px solid var(--pencil); }
   .tickbox input { display: none; }
   .tickbox input:checked + .sq::after { content: "X"; position: absolute; inset: 0; color: var(--pencil);
     font-size: 12px; line-height: 15px; text-align: center; font-weight: 600; }
@@ -361,9 +363,9 @@ PAGE = r"""<!DOCTYPE html>
     <div class="grid2">
       <div class="fld"><label>Max pages</label><input type="number" id="pages" value="__DEFAULT_PAGES__" min="1" max="__MAX_PAGES__"></div>
       <div class="fld"><label>Link depth</label><input type="number" id="depth" value="3" min="0" max="__MAX_DEPTH__"></div>
-      <label class="tickbox"><input type="checkbox" id="render"><span class="sq"></span>
-      <span class="tb-txt"><b>Render JS first</b><br>(best for web apps / complicated sites)</span></label>
     </div>
+    <label class="tickbox jsrow"><input type="checkbox" id="render"><span class="sq"></span>
+      <span class="tb-txt"><b>Render JS first</b><br>(best for web apps / complicated sites)</span></label>
     <div class="rangenote">
       <span class="rn-title">Saving numbered pages? (chapters, episodes, issues)</span>
       <span class="rn-body">Put the numbers in brackets and we'll download every one.<br>
