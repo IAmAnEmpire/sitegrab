@@ -89,7 +89,7 @@ def run_grab(job, url, max_pages, depth, render):
             if grabber.pages_saved == 0:
                 job["error"] = "Nothing downloaded — check the address and the log."
             elif entry:
-                job["entry"] = f"/grabs/{job['id']}/" + entry.as_posix()
+                job["entry"] = f"grabs/{job['id']}/" + entry.as_posix()
         finish(job)
     except SystemExit as e:
         finish(job, error=str(e))
@@ -221,7 +221,7 @@ async function start() {
   $('go').disabled = true; $('go').textContent = 'Downloading…';
   $('result').style.display = 'none';
   $('log').style.display = 'block'; $('log').textContent = '';
-  const resp = await fetch('/start', {
+  const resp = await fetch('start', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({
@@ -242,7 +242,7 @@ async function start() {
 }
 
 async function poll() {
-  const s = await (await fetch('/status?job=' + jobId)).json();
+  const s = await (await fetch('status?job=' + jobId)).json();
   const log = $('log');
   const stick = log.scrollTop + log.clientHeight >= log.scrollHeight - 8;
   log.textContent = s.log.join('\\n');
@@ -255,7 +255,7 @@ async function poll() {
   } else {
     showResult('ok',
       'Done! <a href="' + s.entry + '" target="_blank">Browse the offline ' +
-      'copy</a> &nbsp;or&nbsp; <a href="/zip?job=' + jobId + '">download it ' +
+      'copy</a> &nbsp;or&nbsp; <a href="zip?job=' + jobId + '">download it ' +
       'as a ZIP</a>.');
   }
 }
