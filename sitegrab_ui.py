@@ -285,6 +285,35 @@ PAGE = r"""<!DOCTYPE html>
     .donenote { bottom: 86px; }
     .titleblock { display: none; }
   }
+
+  /* progress panel (overrides earlier .readout) */
+  .readout { left: 50%; right: auto; transform: translateX(-50%); bottom: 96px;
+    width: min(600px, 92vw); max-width: none; z-index: 4;
+    background: rgba(10,26,48,0.94); border: 1px solid var(--faint); padding: 16px 18px 14px; }
+  .pphead { display: flex; justify-content: space-between; align-items: baseline; gap: 12px;
+    font-size: 0.72rem; letter-spacing: 0.12em; color: var(--line); }
+  .pphead .now { max-width: 70%; }
+  .pphead b.pct { color: var(--pencil); font-size: 1rem; }
+  .ppbar { margin-top: 10px; height: 8px; border: 1px solid var(--faint); background: rgba(216,230,244,0.07); }
+  .ppbar i { display: block; height: 100%; width: 0%; background: var(--pencil); transition: width .6s; }
+  .ppmeta { display: flex; justify-content: space-between; margin-top: 8px;
+    font-size: 0.64rem; letter-spacing: 0.12em; color: #8fa9c6; }
+  .ppmeta b { color: var(--line); font-weight: 600; }
+  .pptip { margin-top: 10px; font-size: 0.66rem; letter-spacing: 0.04em; text-transform: none;
+    color: #8fa9c6; line-height: 1.8; }
+  .ppnext { margin-top: 12px; border-top: 1px dashed var(--faint); padding-top: 10px;
+    font-size: 0.66rem; letter-spacing: 0.04em; text-transform: none; color: var(--line); line-height: 1.9; }
+  .ppnext b { color: var(--pencil); }
+  .howto { position: fixed; z-index: 6; left: 50%; bottom: 150px; transform: translateX(-50%);
+    display: none; width: min(520px, 90vw); background: rgba(14,48,89,0.97);
+    border: 1.5px solid var(--line); padding: 16px 20px;
+    font-size: 0.72rem; line-height: 2.1; letter-spacing: 0.04em; text-transform: none; color: var(--line); }
+  .howto.show { display: block; }
+  .howto b { color: var(--pencil); }
+  @media (max-width: 700px) {
+    .readout { bottom: 108px; }
+    .howto { bottom: 170px; }
+  }
 </style>
 </head>
 <body>
@@ -328,8 +357,15 @@ PAGE = r"""<!DOCTYPE html>
 </div>
 
 <div class="readout">
-  <span class="now" id="roNow">preparing&hellip;</span><br>
-  pages <b id="roP">0</b> &nbsp; files <b id="roF">0</b> &nbsp; elapsed <b id="roT">0s</b>
+  <div class="pphead"><span class="now" id="roNow">preparing&hellip;</span><b class="pct" id="ppPct">0%</b></div>
+  <div class="ppbar"><i id="ppBar"></i></div>
+  <div class="ppmeta">
+    <span>pages <b id="roP">0</b> &middot; files <b id="roF">0</b></span>
+    <span>elapsed <b id="roT">0s</b></span>
+  </div>
+  <div class="pptip" id="ppTip">Starting up. Bigger sites can take a minute or two; every page gets saved properly.</div>
+  <div class="ppnext"><b>When this finishes:</b> a ZIP downloads. Unzip it and double-click
+  <b>Open-website.html</b> to view your downloaded site.</div>
   <details><summary>raw log</summary><pre id="rawlog"></pre></details>
 </div>
 
@@ -339,9 +375,13 @@ PAGE = r"""<!DOCTYPE html>
 <div class="donenote" id="doneNote"></div>
 
 <div class="exports">
-  <a class="main" id="browseLink" href="#" target="_blank">Inspect the copy</a>
-  <a id="zipLink" href="#">Export ZIP</a>
+  <a class="main" id="zipLink" href="#">Download the ZIP again</a>
+  <button id="howOpen">hide / show instructions</button>
   <button id="again">&#8635; download another</button>
+</div>
+
+<div class="howto" id="howto">
+  Unzip the file in your Downloads, then double-click <b>Open-website.html</b> to view your downloaded site.
 </div>
 
 <script>
@@ -444,6 +484,13 @@ requestAnimationFrame(draw);
 
 // ---- real crawl wiring ----
 var jobId = null, timer = null, clockTimer = null, seen = 0, nPages = 0, nFiles = 0, t0 = 0;
+var maxReq = 30, tipTimer = null, tipIdx = 0;
+var TIPS = [
+  'Saving each page with its pictures, styles and fonts.',
+  'Links are being rewired so the copy works with no internet.',
+  'Bigger sites simply take longer. Nothing is stuck.',
+  'When this finishes, your ZIP downloads by itself.'
+];
 
 function specError(msg) {
   var e = $('specerr'); e.style.display = 'block'; e.textContent = msg;
@@ -476,6 +523,14 @@ async function start() {
   document.body.classList.remove('certified');
   document.body.classList.add('drafting');
   $('go').disabled = false; $('go').textContent = 'Download';
+  maxReq = Math.max(1, +$('pages').value || 30);
+  $('ppPct').textContent = '0%'; $('ppBar').style.width = '0%';
+  $('howto').classList.remove('show');
+  tipIdx = 0; $('ppTip').textContent = TIPS[0];
+  tipTimer = setInterval(function () {
+    tipIdx = (tipIdx + 1) % TIPS.length;
+    $('ppTip').textContent = TIPS[tipIdx];
+  }, 7000);
   t0 = Date.now();
   clockTimer = setInterval(function () { $('roT').textContent = Math.floor((Date.now()-t0)/1000) + 's'; }, 500);
   timer = setInterval(poll, 700);
@@ -488,6 +543,9 @@ function digest(line) {
     addPage(nPages === 1 ? 'INDEX' : lastSeg(url));
     $('roNow').textContent = 'downloading ' + url.replace(/https?:\/\//, '').slice(0, 60);
     $('roP').textContent = nPages;
+    var pct = Math.min(99, Math.round(nPages / maxReq * 100));
+    $('ppPct').textContent = pct + '%';
+    $('ppBar').style.width = pct + '%';
   } else if (line.indexOf('+ asset') !== -1) {
     var aurl = line.split('+ asset ')[1] || '';
     nFiles++;
@@ -526,20 +584,30 @@ async function poll() {
     sp.style.opacity = 1; sp.style.pointerEvents = 'auto'; sp.style.transform = 'translate(-50%, -50%)';
     return;
   }
+  clearInterval(tipTimer);
   $('roNow').textContent = 'complete';
-  $('doneNote').textContent = nPages <= 1
+  $('ppPct').textContent = '100%'; $('ppBar').style.width = '100%';
+  $('doneNote').textContent = (nPages <= 1
     ? 'Saved 1 page. It had no further links on the same site to follow, so that single page is your whole copy.'
-    : 'Saved ' + nPages + ' pages and ' + nFiles + ' files, rewired to work offline.';
-  $('browseLink').href = s.entry;
+    : 'Saved ' + nPages + ' pages and ' + nFiles + ' files, rewired to work offline.')
+    + ' Your ZIP is downloading.';
   $('zipLink').href = 'zip?job=' + jobId;
   document.body.classList.remove('drafting');
   document.body.classList.add('certified');
+  $('howto').classList.add('show');
+  var auto = document.createElement('a');
+  auto.href = 'zip?job=' + jobId; auto.download = '';
+  document.body.appendChild(auto); auto.click(); auto.remove();
 }
 
 $('go').addEventListener('click', start);
 $('url').addEventListener('keydown', function (e) { if (e.key === 'Enter') start(); });
+$('howOpen').addEventListener('click', function () {
+  $('howto').classList.toggle('show');
+});
 $('again').addEventListener('click', function () {
   document.body.classList.remove('certified');
+  $('howto').classList.remove('show');
   rooms = []; pipes = []; pagesArr = [];
   var sp = document.querySelector('.spec');
   sp.style.opacity = ''; sp.style.pointerEvents = ''; sp.style.transform = '';
@@ -609,11 +677,28 @@ class Handler(BaseHTTPRequestHandler):
             self.send(404, b"unknown job", "text/plain")
             return
         root = Path(job["out_dir"])
+        entry_rel = None
+        if job.get("entry"):
+            entry_rel = job["entry"].split(job["id"] + "/", 1)[-1]
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
             for f in sorted(root.rglob("*")):
                 if f.is_file():
-                    z.write(f, f.relative_to(root))
+                    z.write(f, str(Path("website-files") / f.relative_to(root)))
+            if entry_rel:
+                target = "website-files/" + urllib.parse.quote(entry_rel)
+                z.writestr("Open-website.html",
+                    "<!DOCTYPE html><html><head><meta charset='utf-8'>"
+                    "<meta http-equiv='refresh' content='0; url=" + target + "'>"
+                    "<title>Opening your website…</title></head>"
+                    "<body style='font-family:sans-serif;padding:40px'>"
+                    "<p>Opening your website… If nothing happens, "
+                    "<a href='" + target + "'>click here</a>.</p></body></html>")
+            z.writestr("READ-ME.txt",
+                "Double-click Open-website.html to view your downloaded site.\n"
+                "(Keep the website-files folder next to it.)\n"
+                "\n"
+                "sitegrab - a free tool by Douvenne - douvenne.com/projects/sitegrab\n")
         name = (job["domain"] or "site") + ".zip"
         self.send(200, buf.getvalue(), "application/zip",
                   {"Content-Disposition": f'attachment; filename="{name}"'})
