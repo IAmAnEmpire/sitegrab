@@ -314,6 +314,22 @@ PAGE = r"""<!DOCTYPE html>
     .readout { bottom: 108px; }
     .howto { bottom: 170px; }
   }
+
+  /* done state: one card, nothing stacked behind it */
+  body.certified .readout, body.certified .mobilist { display: none; }
+  .howto, #howOpen { display: none !important; }
+  .donenote { position: fixed; z-index: 5; left: 50%; transform: translateX(-50%); bottom: 100px;
+    width: min(600px, 92vw); max-width: none; text-align: left;
+    background: rgba(10,26,48,0.97); border: 1.5px solid var(--line);
+    padding: 18px 20px; font-size: 0.74rem; line-height: 2; letter-spacing: 0.04em; color: var(--line); }
+  .donenote b { color: var(--pencil); }
+  .donenote .sum { color: #8fa9c6; display: block; margin-bottom: 8px; }
+  .exports { bottom: 34px; }
+  @media (max-width: 700px) {
+    .donenote { bottom: 96px; }
+    .exports { bottom: 14px; }
+    .cert { bottom: auto; top: 20%; }
+  }
 </style>
 </head>
 <body>
@@ -587,14 +603,15 @@ async function poll() {
   clearInterval(tipTimer);
   $('roNow').textContent = 'complete';
   $('ppPct').textContent = '100%'; $('ppBar').style.width = '100%';
-  $('doneNote').textContent = (nPages <= 1
-    ? 'Saved 1 page. It had no further links on the same site to follow, so that single page is your whole copy.'
-    : 'Saved ' + nPages + ' pages and ' + nFiles + ' files, rewired to work offline.')
-    + ' Your ZIP is downloading.';
+  $('doneNote').innerHTML = '<span class="sum">'
+    + (nPages <= 1
+      ? 'Saved 1 page. It had no further links on the same site to follow, so that single page is your whole copy.'
+      : 'Saved ' + nPages + ' pages and ' + nFiles + ' files.')
+    + ' Your ZIP is downloading.</span>'
+    + 'Unzip the file in your Downloads, then double-click <b>Open-website.html</b> to view your downloaded site.';
   $('zipLink').href = 'zip?job=' + jobId;
   document.body.classList.remove('drafting');
   document.body.classList.add('certified');
-  $('howto').classList.add('show');
   var auto = document.createElement('a');
   auto.href = 'zip?job=' + jobId; auto.download = '';
   document.body.appendChild(auto); auto.click(); auto.remove();
