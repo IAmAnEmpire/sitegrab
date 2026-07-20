@@ -119,7 +119,7 @@ def purge_old_jobs():
             shutil.rmtree(GRABS_DIR / job["id"], ignore_errors=True)
 
 
-PAGE = """<!DOCTYPE html>
+PAGE = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
